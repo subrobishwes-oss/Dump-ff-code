@@ -1,0 +1,119 @@
+name: Cloud Dumper
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      DUMPER_VERSION: v6.7.40
+      DUMPER_URL: https://github.com/Perfare/Il2CppDumper/releases/download/v6.7.40/Il2CppDumper-v6.7.40.zip
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Validate split files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          shopt -s nullglob
+          lib_files=(lib.part.*)
+          meta_files=(meta.part.*)
+
+          if [ ${#lib_files[@]} -eq 0 ]; then
+            echo "::error::No lib.part.* files found in repository."
+            exit 1
+          fi
+
+          if [ ${#meta_files[@]} -eq 0 ]; then
+            echo "::error::No meta.part.* files found in repository."
+            exit 1
+          fi
+
+          echo "Found ${#lib_files[@]} lib parts and ${#meta_files[@]} metadata parts"
+          ls -lh "${lib_files[@]}" "${meta_files[@]}" | sed -n '1,20p'
+
+      - name: Merge split files
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          cat lib.part.* > libil2cpp_new.so
+          cat meta.part.* > global-metadata.dat
+
+          ls -lh libil2cpp_new.so global-metadata.dat
+          wc -c libil2cpp_new.so global-metadata.dat
+          file libil2cpp_new.so global-metadata.dat || true
+
+          test -s libil2cpp_new.so
+          test -s global-metadata.dat
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update -y
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            mono-complete \
+            unzip \
+            wget \
+            ca-certificates
+
+          mono --version
+          unzip -v | head -n 2
+
+      - name: Download Il2CppDumper
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mkdir -p dumper
+          wget --retry-connrefused --tries=5 --waitretry=5 -q "$DUMPER_URL" -O dumper.zip
+          unzip -o -q dumper.zip -d dumper
+
+          exe_path="$(find dumper -type f -iname 'Il2CppDumper*.exe' | head -n 1)"
+          if [ -z "$exe_path" ]; then
+            echo "::error::No Il2CppDumper executable found in the downloaded archive."
+            find dumper -maxdepth 3 -print
+            exit 1
+          fi
+
+          echo "EXE_PATH=$exe_path" >> "$GITHUB_ENV"
+          echo "Found dumper executable at: $exe_path"
+
+      - name: Run Dumper with Mono
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          test -f "$EXE_PATH"
+          test -s libil2cpp_new.so
+          test -s global-metadata.dat
+
+          echo "Running: mono $EXE_PATH libil2cpp_new.so global-metadata.dat"
+          mono "$EXE_PATH" libil2cpp_new.so global-metadata.dat || {
+            echo "::error::Il2CppDumper failed. This usually means the split files are incomplete, mismatched, or not a valid lib + metadata pair for this build."
+            ls -lh .
+            find dumper -maxdepth 4 -type f | sort | sed -n '1,120p'
+            exit 1
+          }
+
+      - name: Upload dump artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dump-artifacts
+          path: |
+            dump.cs
+            dumper/**
+            libil2cpp_new.so
+            global-metadata.dat
+          if-no-files-found: warn
