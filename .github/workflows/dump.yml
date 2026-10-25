@@ -1,0 +1,29 @@
+name: Cloud Dumper
+on: [push, workflow_dispatch]
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Merge Parts and Download Dumper
+        run: |
+          # ফাইলগুলো জোড়া লাগাচ্ছি
+          cat lib.part.* > libil2cpp_new.so
+          cat meta.part.* > global-metadata.dat
+          
+          # ডাম্পার নামিয়ে আনছি
+          wget https://github.com/MlgmXyysd/Il2CppDumper-Standalone/releases/download/v6.7.41-standalone/Il2CppDumper-linux-v6.7.41.zip
+          unzip Il2CppDumper-linux-v6.7.41.zip -d dumper
+          chmod +x dumper/Il2CppDumper
+          
+      - name: Run Dumper
+        run: |
+          ./dumper/Il2CppDumper libil2cpp_new.so global-metadata.dat ./output
+          
+      - name: Upload dump.cs
+        uses: actions/upload-artifact@v3
+        with:
+          name: dump-file
+          path: output/dump.cs
